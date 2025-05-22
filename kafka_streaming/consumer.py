@@ -3,7 +3,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from kafka import KafkaConsumer
-from sqlalchemy import Table, MetaData, create_engine
+from sqlalchemy import Table, MetaData
 from sqlalchemy.orm import sessionmaker
 import json
 import logging
@@ -20,7 +20,10 @@ def kafka_consumer():
     consumer_config = {
         'bootstrap_servers': 'localhost:9092',
         'group_id': 'happiness_group',
-        'auto_offset_reset': 'earliest'
+        'auto_offset_reset': 'earliest',
+        'session_timeout_ms': 30000,
+        'heartbeat_interval_ms': 10000,
+        'max_poll_interval_ms': 600000
     }
 
     consumer = KafkaConsumer('happiness-topic', **consumer_config)
@@ -30,16 +33,12 @@ def save_to_postgresql(message_value):
     """Guarda las predicciones y features en PostgreSQL."""
     try:
         engine = connect_db()
-        # Crear MetaData sin el argumento bind
         metadata = MetaData()
-        # Cargar la tabla con autoload_with, pasando el engine
         table = Table('happiness_predictions', metadata, autoload_with=engine)
 
-        # Crear una sesión
         Session = sessionmaker(bind=engine)
         session = Session()
 
-        # Insertar los datos
         session.execute(table.insert(), [message_value])
         session.commit()
         logging.info(f"✅ Predicción guardada en PostgreSQL: {message_value}")
@@ -48,7 +47,7 @@ def save_to_postgresql(message_value):
 
     except Exception as e:
         logging.error(f"Error al guardar en PostgreSQL: {e}")
-        raise  # Levanta la excepción para depurar si es necesario
+        # No levantes la excepción para que el consumidor continúe
 
 def calculate_performance_metric(y_true, y_pred):
     """Calcula el MSE entre los valores reales y predichos."""
@@ -60,22 +59,14 @@ def calculate_performance_metric(y_true, y_pred):
 def consume_kafka_messages():
     """Consume mensajes de Kafka, predice y guarda en PostgreSQL."""
     # Cargar el modelo preentrenado
-    model = joblib.load("../models/happiness_model_XGB.pkl")
-
-    # Definir el orden esperado de las features
-    expected_feature_order = [
-        'Health (Life Expectancy)',
-        'Freedom',
-        'Trust (Government Corruption)',
-        'Family',
-        'Economy (GDP per Capita)',
-        'Generosity',
-        'Year_2015',
-        'Year_2016',
-        'Year_2017',
-        'Year_2018',
-        'Year_2019'
-    ]
+    try:
+        model = joblib.load("../models/happiness_model_XGB.pkl")
+        # Verificar las features esperadas por el modelo
+        expected_feature_order = model.get_booster().feature_names
+        logging.info(f"Features esperadas por el modelo: {expected_feature_order}")
+    except Exception as e:
+        logging.error(f"Error al cargar el modelo: {e}")
+        return
 
     create_database()
     logging.info(f"Base de datos creada o verificada.")
@@ -90,7 +81,6 @@ def consume_kafka_messages():
                 message_value = json.loads(msg.value.decode('utf-8'))
                 logging.info(f"Mensaje recibido: {message_value}")
 
-                # Extraer features y valor real del mensaje
                 features = message_value['features']
                 y_test = message_value.get('y_test')
 
@@ -98,14 +88,13 @@ def consume_kafka_messages():
                     logging.warning("No se encontró y_test en el mensaje")
                     continue
 
-                # Crear un DataFrame con las features y reordenarlas
+                # Crear un DataFrame con las features y reordenarlas según el modelo
                 features_df = pd.DataFrame([features])
-                features_df = features_df[expected_feature_order]  # Reordenar columnas
+                features_df = features_df[expected_feature_order]
 
                 # Predecir Happiness Score
                 y_pred_value = model.predict(features_df)[0]
 
-                # Preparar datos para guardar
                 data_to_save = {
                     'index': message_value['index'],
                     'features': json.dumps(features),
@@ -122,11 +111,12 @@ def consume_kafka_messages():
             except Exception as e:
                 logging.error(f"Error procesando mensaje: {e}")
 
-            time.sleep(1)
+            # Reducir el tiempo de espera para evitar problemas de heartbeat
+            time.sleep(0.1)
 
     except KeyboardInterrupt:
         logging.info("Consumiendo mensajes interrumpido por el usuario.")
-        if y_true_list and predictions:  # Solo calcular si hay datos
+        if y_true_list and predictions:
             calculate_performance_metric(y_true_list, [pred['y_pred'] for pred in predictions])
     except Exception as e:
         logging.error(f"Error en el consumidor: {e}")
