@@ -29,11 +29,6 @@ def send_features_to_kafka(df, topic="happiness-topic", sleep_seconds=1):
             'Family',
             'Economy (GDP per Capita)',
             'Health (Life Expectancy)',
-            'Year_2015',
-            'Year_2016',
-            'Year_2017',
-            'Year_2018',
-            'Year_2019',
             'Region_Western Europe',
             'Region_North America',
             'Region_Australia and New Zealand',
@@ -45,7 +40,7 @@ def send_features_to_kafka(df, topic="happiness-topic", sleep_seconds=1):
             'Region_Southern Asia',
             'Region_Sub-Saharan Africa'
         ]
-        target_col = 'Happiness Score'  # Ajusta según el nombre exacto en df_clean.csv
+        target_col = 'Happiness Score' 
 
         # Debug: Imprimir las columnas disponibles
         logging.info(f"Columnas en df_clean.csv: {list(df.columns)}")
